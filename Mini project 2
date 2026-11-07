@@ -1,0 +1,1519 @@
+"""
+====================================================================
+SMARTGRADE
+5-Subject Student Performance, CGPA & Progress Tracking System
+====================================================================
+
+MINI PROJECT - PYTHON MODULE 02
+
+MAIN RULE:
+- Each student has exactly 5 subjects/courses.
+- Marks are validated between 0 and 100.
+- Any subject with marks from 0 to 49 = FAIL.
+- If even ONE subject is failed:
+      Overall Result = FAIL
+      Overall Grade  = F
+      CGPA            = NOT APPLICABLE
+- CGPA is calculated ONLY when the student passes all 5 subjects.
+
+CGPA SCALE:
+A+ = 10
+A  = 9
+B  = 8
+C  = 7
+D  = 6
+F  = 0
+
+OTHER FEATURES:
+- Personalized overall insights
+- Subject-wise improvement insights
+- At-risk alert for marks below 40%
+- Next-grade target
+- Previous semester comparison
+- Improving / Declining / Stable trend
+- Performance growth
+- Highest and lowest semester
+- Multiple student records
+- Search
+- Filtering
+- Class analytics
+- Subject-wise class averages
+- Demo data
+- Error handling and validation
+- Structured student reports
+====================================================================
+"""
+
+
+SUBJECT_COUNT = 5
+
+
+# ================================================================
+# 1. GRADE AND RESULT FUNCTIONS
+# ================================================================
+
+def calculate_grade(marks):
+    """Assign a grade based on the predefined marking criteria."""
+    if marks >= 90:
+        return "A+"
+    elif marks >= 80:
+        return "A"
+    elif marks >= 70:
+        return "B"
+    elif marks >= 60:
+        return "C"
+    elif marks >= 50:
+        return "D"
+    else:
+        return "F"
+
+
+def grade_to_points(grade):
+    """Convert grade to a 10-point grade value."""
+    points = {
+        "A+": 10,
+        "A": 9,
+        "B": 8,
+        "C": 7,
+        "D": 6,
+        "F": 0
+    }
+
+    return points[grade]
+
+
+def evaluate_result(marks):
+    """A subject is passed only if marks are 50 or above."""
+    if marks >= 50:
+        return "PASS"
+
+    return "FAIL"
+
+
+def get_academic_status(marks):
+    """Return a descriptive performance status."""
+    if marks >= 90:
+        return "Outstanding"
+    elif marks >= 80:
+        return "Excellent"
+    elif marks >= 70:
+        return "Very Good"
+    elif marks >= 60:
+        return "Good"
+    elif marks >= 50:
+        return "Satisfactory"
+    elif marks >= 40:
+        return "Needs Attention"
+    else:
+        return "Critical / At Risk"
+
+
+def get_remark(grade):
+    """Return an overall performance remark."""
+    remarks = {
+        "A+": "Outstanding Performance",
+        "A": "Excellent Performance",
+        "B": "Very Good Performance",
+        "C": "Good Performance",
+        "D": "Satisfactory Performance",
+        "F": "Needs Improvement"
+    }
+
+    return remarks[grade]
+
+
+# ================================================================
+# 2. ACADEMIC CALCULATION FUNCTIONS
+# ================================================================
+
+def calculate_average(subject_marks):
+    """Calculate average percentage across the 5 subjects."""
+    return sum(subject_marks) / len(subject_marks)
+
+
+def has_failed_subject(subject_marks):
+    """Return True if any subject has marks below 50."""
+    return any(mark < 50 for mark in subject_marks)
+
+
+def calculate_overall_result(subject_marks):
+    """
+    Overall PASS requires passing every subject.
+
+    Any score from 0-49 means the student fails.
+    """
+    if has_failed_subject(subject_marks):
+        return "FAIL"
+
+    return "PASS"
+
+
+def calculate_cgpa(subject_marks):
+    """
+    Calculate CGPA ONLY if all 5 subjects are passed.
+
+    If any subject is below 50, return None because
+    CGPA is not awarded to a failed student.
+    """
+    if has_failed_subject(subject_marks):
+        return None
+
+    total_points = 0
+
+    for marks in subject_marks:
+        grade = calculate_grade(marks)
+        total_points += grade_to_points(grade)
+
+    return total_points / len(subject_marks)
+
+
+def calculate_overall_grade(subject_marks):
+    """
+    Failed students receive F and no CGPA.
+
+    Passing students receive an overall grade based on CGPA.
+    """
+    if has_failed_subject(subject_marks):
+        return "F"
+
+    cgpa = calculate_cgpa(subject_marks)
+
+    if cgpa >= 9:
+        return "A+"
+    elif cgpa >= 8:
+        return "A"
+    elif cgpa >= 7:
+        return "B"
+    elif cgpa >= 6:
+        return "C"
+    elif cgpa >= 5:
+        return "D"
+    else:
+        return "F"
+
+
+# ================================================================
+# 3. PERSONALIZED INSIGHT FUNCTIONS
+# ================================================================
+
+def get_improvement_insight(marks, subject_marks):
+    """
+    Generate an overall personalized insight.
+
+    Failed students receive a more urgent recommendation.
+    """
+    if has_failed_subject(subject_marks):
+        return (
+            "Your current result is FAIL because one or more subjects "
+            "are below 50%. CGPA is not applicable until all subjects "
+            "meet the passing requirement. Prioritize your failed "
+            "subjects, strengthen fundamentals, and practice regularly."
+        )
+
+    if marks >= 90:
+        return (
+            "Outstanding work! Your performance is excellent. "
+            "Maintain consistency and challenge yourself with advanced "
+            "concepts and application-based problems."
+        )
+    elif marks >= 80:
+        return (
+            "Excellent performance. Focus on accuracy and consistency "
+            "to move closer to the A+ range."
+        )
+    elif marks >= 70:
+        return (
+            "You have a strong foundation. Strengthen concept clarity "
+            "and practice application-based questions to improve further."
+        )
+    elif marks >= 60:
+        return (
+            "You are doing well. Focus on regular revision, concept "
+            "clarity, and solving more practice questions."
+        )
+    else:
+        return (
+            "You have passed, but your performance can improve. "
+            "Increase regular practice and revise fundamental concepts."
+        )
+
+
+def get_subject_insight(subject, marks):
+    """Generate a personalized insight for each subject."""
+    if marks >= 90:
+        return (
+            f"{subject}: Excellent performance. Maintain consistency "
+            "and aim for mastery."
+        )
+
+    elif marks >= 80:
+        return (
+            f"{subject}: Strong performance. Improve accuracy "
+            "to target A+."
+        )
+
+    elif marks >= 70:
+        return (
+            f"{subject}: Good foundation. Practice more "
+            "application-based questions."
+        )
+
+    elif marks >= 60:
+        return (
+            f"{subject}: Good progress. Focus on revision "
+            "and concept clarity."
+        )
+
+    elif marks >= 50:
+        return (
+            f"{subject}: Passed, but additional practice "
+            "can improve your grade."
+        )
+
+    elif marks >= 40:
+        return (
+            f"{subject}: Needs attention. Revise fundamentals "
+            "and practice regularly."
+        )
+
+    else:
+        return (
+            f"{subject}: AT RISK. This subject is below 40%. "
+            "Prioritize fundamentals, practice regularly, "
+            "and seek academic support."
+        )
+
+
+def get_at_risk_subjects(subjects, marks):
+    """Return subjects where marks are below the 40% early-warning threshold."""
+    at_risk = []
+
+    for index in range(len(subjects)):
+        if marks[index] < 40:
+            at_risk.append(subjects[index])
+
+    return at_risk
+
+
+def get_failed_subjects(subjects, marks):
+    """Return subjects where marks are below the passing threshold."""
+    failed = []
+
+    for index in range(len(subjects)):
+        if marks[index] < 50:
+            failed.append(subjects[index])
+
+    return failed
+
+
+# ================================================================
+# 4. NEXT-GRADE TARGET FUNCTIONS
+# ================================================================
+
+def marks_to_next_grade(marks):
+    """Calculate marks required to reach the next percentage grade."""
+    targets = [
+        (90, "A+"),
+        (80, "A"),
+        (70, "B"),
+        (60, "C"),
+        (50, "D")
+    ]
+
+    for target, grade in targets:
+        if marks < target:
+            return (
+                f"{target - marks:.1f} mark(s) needed "
+                f"to reach Grade {grade}."
+            )
+
+    return "Maximum percentage grade achieved: A+."
+
+
+def cgpa_to_next_grade(cgpa):
+    """
+    Calculate the CGPA required to reach the next grade.
+
+    This is only used for students who have passed all subjects.
+    """
+    if cgpa is None:
+        return "CGPA target unavailable because the student has failed."
+
+    targets = [
+        (9, "A+"),
+        (8, "A"),
+        (7, "B"),
+        (6, "C"),
+        (5, "D")
+    ]
+
+    for target, grade in targets:
+        if cgpa < target:
+            return (
+                f"{target - cgpa:.2f} CGPA point(s) needed "
+                f"to reach {grade}."
+            )
+
+    return "Maximum CGPA grade achieved: A+."
+
+
+# ================================================================
+# 5. SEMESTER COMPARISON FUNCTIONS
+# ================================================================
+
+def analyze_trend(semester_marks):
+    """Determine whether semester performance is improving or declining."""
+    if len(semester_marks) < 2:
+        return "Insufficient Data"
+
+    differences = []
+
+    for index in range(1, len(semester_marks)):
+        difference = semester_marks[index] - semester_marks[index - 1]
+        differences.append(difference)
+
+    positive = sum(1 for value in differences if value > 1)
+    negative = sum(1 for value in differences if value < -1)
+
+    if positive > negative:
+        return "Improving"
+    elif negative > positive:
+        return "Declining"
+    else:
+        return "Stable"
+
+
+def calculate_growth(semester_marks):
+    """Calculate percentage change from first to current semester."""
+    if len(semester_marks) < 2:
+        return 0
+
+    if semester_marks[0] == 0:
+        return 0
+
+    first = semester_marks[0]
+    current = semester_marks[-1]
+
+    return ((current - first) / first) * 100
+
+
+def get_highest_semester(semester_marks):
+    """Return the highest semester number and score."""
+    if not semester_marks:
+        return None
+
+    highest = max(semester_marks)
+    semester_number = semester_marks.index(highest) + 1
+
+    return semester_number, highest
+
+
+def get_lowest_semester(semester_marks):
+    """Return the lowest semester number and score."""
+    if not semester_marks:
+        return None
+
+    lowest = min(semester_marks)
+    semester_number = semester_marks.index(lowest) + 1
+
+    return semester_number, lowest
+
+
+def get_trend_insight(semester_marks):
+    """Generate an insight based on previous semester performance."""
+    trend = analyze_trend(semester_marks)
+
+    if trend == "Improving":
+        return (
+            "Your performance is improving across semesters. "
+            "Continue your current study habits and maintain "
+            "this positive momentum."
+        )
+
+    elif trend == "Declining":
+        return (
+            "Your performance is declining. Review changes in your "
+            "study routine and focus on subjects where marks dropped."
+        )
+
+    elif trend == "Stable":
+        return (
+            "Your performance is relatively stable. Identify one "
+            "or two weak areas and target them for improvement."
+        )
+
+    else:
+        return (
+            "Add previous semester data to unlock detailed "
+            "trend analysis."
+        )
+
+
+# ================================================================
+# 6. INPUT VALIDATION AND ERROR HANDLING
+# ================================================================
+
+def get_student_name():
+    """Safely accept a non-empty student name."""
+    while True:
+        name = input("Enter student name: ").strip()
+
+        if not name:
+            print("ERROR: Student name cannot be empty.")
+
+        elif len(name) < 2:
+            print("ERROR: Please enter a valid name.")
+
+        else:
+            return name
+
+
+def get_subject_name(number):
+    """Safely accept a subject/course name."""
+    while True:
+        subject = input(
+            f"Enter Subject/Course {number} name: "
+        ).strip()
+
+        if not subject:
+            print("ERROR: Subject name cannot be empty.")
+
+        else:
+            return subject
+
+
+def get_valid_marks(prompt):
+    """
+    Safely accept marks between 0 and 100.
+
+    Handles:
+    - Non-numeric input
+    - Negative values
+    - Values above 100
+    """
+    while True:
+        try:
+            marks = float(input(prompt).strip())
+
+            if marks < 0 or marks > 100:
+                print(
+                    "ERROR: Marks must be between 0 and 100."
+                )
+            else:
+                return marks
+
+        except ValueError:
+            print(
+                "ERROR: Please enter a valid numeric value."
+            )
+
+
+def get_yes_no(prompt):
+    """Safely accept a Yes/No response."""
+    while True:
+        answer = input(prompt).strip().lower()
+
+        if answer in ("y", "yes"):
+            return True
+
+        elif answer in ("n", "no"):
+            return False
+
+        else:
+            print("ERROR: Please enter Y or N.")
+
+
+# ================================================================
+# 7. STUDENT RECORD CREATION
+# ================================================================
+
+def create_student_record(
+    name,
+    subjects,
+    marks,
+    semester_marks
+):
+    """Create a structured student record."""
+    if len(subjects) != SUBJECT_COUNT:
+        raise ValueError("Exactly 5 subjects are required.")
+
+    if len(marks) != SUBJECT_COUNT:
+        raise ValueError("Exactly 5 subject marks are required.")
+
+    average = calculate_average(marks)
+    result = calculate_overall_result(marks)
+    cgpa = calculate_cgpa(marks)
+    overall_grade = calculate_overall_grade(marks)
+
+    subject_data = []
+
+    for subject, mark in zip(subjects, marks):
+        grade = calculate_grade(mark)
+
+        subject_data.append({
+            "subject": subject,
+            "marks": mark,
+            "grade": grade,
+            "grade_points": grade_to_points(grade),
+            "result": evaluate_result(mark),
+            "status": get_academic_status(mark)
+        })
+
+    return {
+        "name": name,
+        "subjects": subjects,
+        "subject_marks": marks,
+        "subject_data": subject_data,
+        "average": average,
+        "cgpa": cgpa,
+        "grade": overall_grade,
+        "result": result,
+        "status": get_academic_status(average),
+        "remark": get_remark(overall_grade),
+        "insight": get_improvement_insight(
+            average,
+            marks
+        ),
+        "at_risk": any(mark < 40 for mark in marks),
+        "semester_marks": semester_marks
+    }
+
+
+# ================================================================
+# 8. REPORT DISPLAY
+# ================================================================
+
+def print_separator(char="=", length=82):
+    print(char * length)
+
+
+def display_student_report(student):
+    """Display a complete structured student report."""
+    print()
+    print_separator()
+    print("                    SMARTGRADE STUDENT REPORT")
+    print_separator()
+
+    print(f"Student Name       : {student['name']}")
+    print(f"Average Percentage : {student['average']:.2f}%")
+
+    # IMPORTANT:
+    # Failed students do NOT receive a CGPA.
+    if student["cgpa"] is None:
+        print("CGPA               : NOT APPLICABLE (FAILED)")
+    else:
+        print(
+            f"CGPA               : "
+            f"{student['cgpa']:.2f} / 10.00"
+        )
+
+    print(f"Overall Grade      : {student['grade']}")
+    print(f"Overall Result     : {student['result']}")
+    print(f"Academic Status    : {student['status']}")
+    print(f"Performance Remark : {student['remark']}")
+
+    print_separator("-")
+    print("SUBJECT-WISE PERFORMANCE")
+    print_separator("-")
+
+    print(
+        f"{'Subject':<25}"
+        f"{'Marks':<10}"
+        f"{'Grade':<8}"
+        f"{'Points':<9}"
+        f"{'Result':<10}"
+    )
+
+    print("-" * 82)
+
+    for data in student["subject_data"]:
+        print(
+            f"{data['subject'][:24]:<25}"
+            f"{data['marks']:<10.1f}"
+            f"{data['grade']:<8}"
+            f"{data['grade_points']:<9}"
+            f"{data['result']:<10}"
+        )
+
+    print_separator("-")
+    print("PERSONALIZED OVERALL INSIGHT")
+    print(student["insight"])
+
+    print_separator("-")
+    print("SUBJECT IMPROVEMENT INSIGHTS")
+
+    for data in student["subject_data"]:
+        insight = get_subject_insight(
+            data["subject"],
+            data["marks"]
+        )
+
+        print("• " + insight)
+
+    print_separator("-")
+    print("NEXT GRADE TARGET")
+
+    print(marks_to_next_grade(student["average"]))
+
+    if student["cgpa"] is not None:
+        print(cgpa_to_next_grade(student["cgpa"]))
+    else:
+        print(
+            "CGPA target unavailable because "
+            "the student has failed."
+        )
+
+    failed_subjects = get_failed_subjects(
+        student["subjects"],
+        student["subject_marks"]
+    )
+
+    if failed_subjects:
+        print_separator("-")
+        print("FAILED SUBJECTS")
+        print("• " + "\n• ".join(failed_subjects))
+
+        print()
+        print(
+            "IMPORTANT: Because at least one subject is below 50%, "
+            "the student has FAILED and CGPA is NOT APPLICABLE."
+        )
+
+    at_risk_subjects = get_at_risk_subjects(
+        student["subjects"],
+        student["subject_marks"]
+    )
+
+    if at_risk_subjects:
+        print_separator("-")
+        print("ACADEMIC SUPPORT ALERT")
+        print(
+            "Subjects below 40% (early-warning threshold):"
+        )
+
+        for subject in at_risk_subjects:
+            print(f"• {subject}")
+
+        print()
+        print(
+            "Recommendation: Focus on fundamentals, regular practice, "
+            "revision, and academic support."
+        )
+
+    # ------------------------------------------------------------
+    # SEMESTER COMPARISON
+    # ------------------------------------------------------------
+
+    semesters = student["semester_marks"]
+
+    if len(semesters) >= 2:
+        print_separator("-")
+        print("PREVIOUS SEMESTER COMPARISON")
+
+        for number, mark in enumerate(semesters, start=1):
+            print(
+                f"Semester {number:<3}: "
+                f"{mark:.1f}% | "
+                f"Grade {calculate_grade(mark)}"
+            )
+
+        trend = analyze_trend(semesters)
+        growth = calculate_growth(semesters)
+
+        print_separator("-")
+        print(f"Performance Trend  : {trend}")
+
+        if growth > 0:
+            print(
+                f"Performance Change : +{growth:.2f}%"
+            )
+        else:
+            print(
+                f"Performance Change : {growth:.2f}%"
+            )
+
+        highest = get_highest_semester(semesters)
+        lowest = get_lowest_semester(semesters)
+
+        print(
+            f"Highest Semester   : "
+            f"Semester {highest[0]} ({highest[1]:.1f}%)"
+        )
+
+        print(
+            f"Lowest Semester    : "
+            f"Semester {lowest[0]} ({lowest[1]:.1f}%)"
+        )
+
+        print()
+        print("TREND INSIGHT")
+        print(get_trend_insight(semesters))
+
+    print_separator()
+    print("End of Student Report")
+    print_separator()
+
+
+# ================================================================
+# 9. NEW STUDENT EVALUATION
+# ================================================================
+
+def evaluate_new_student():
+    """Collect details for a new student."""
+    print()
+    print_separator()
+    print("                   EVALUATE NEW STUDENT")
+    print_separator()
+
+    name = get_student_name()
+
+    subjects = []
+    marks = []
+
+    print()
+    print("Enter exactly 5 subjects/courses.")
+    print("Marks must be between 0 and 100.")
+    print()
+    print(
+        "PASSING RULE: Every subject must have at least 50 marks."
+    )
+    print(
+        "If any subject is below 50, the student FAILS "
+        "and CGPA is NOT APPLICABLE."
+    )
+
+    print()
+
+    for number in range(1, SUBJECT_COUNT + 1):
+        subject = get_subject_name(number)
+
+        mark = get_valid_marks(
+            f"Enter marks for {subject}: "
+        )
+
+        subjects.append(subject)
+        marks.append(mark)
+
+    average = calculate_average(marks)
+    result = calculate_overall_result(marks)
+    cgpa = calculate_cgpa(marks)
+    grade = calculate_overall_grade(marks)
+
+    print()
+    print_separator("-")
+    print("CURRENT SEMESTER SUMMARY")
+    print_separator("-")
+
+    print(f"Average Percentage : {average:.2f}%")
+    print(f"Overall Grade      : {grade}")
+    print(f"Overall Result     : {result}")
+
+    if cgpa is None:
+        print("CGPA               : NOT APPLICABLE (FAILED)")
+    else:
+        print(f"CGPA               : {cgpa:.2f} / 10.00")
+
+    print_separator("-")
+
+    # ------------------------------------------------------------
+    # PREVIOUS SEMESTER INPUT
+    # ------------------------------------------------------------
+
+    previous_semesters = []
+
+    print()
+    print("PREVIOUS SEMESTER DATA")
+    print(
+        "Enter previous semester average percentages "
+        "for comparison."
+    )
+    print(
+        "Enter N when there are no more previous semesters."
+    )
+
+    while True:
+        answer = input(
+            "Add a previous semester? (Y/N): "
+        ).strip().lower()
+
+        if answer in ("n", "no"):
+            break
+
+        elif answer in ("y", "yes"):
+            previous_mark = get_valid_marks(
+                f"Enter Semester "
+                f"{len(previous_semesters) + 1} average: "
+            )
+
+            previous_semesters.append(previous_mark)
+
+        else:
+            print("ERROR: Please enter Y or N.")
+
+    # Current semester is automatically included.
+    semester_marks = previous_semesters + [average]
+
+    return create_student_record(
+        name,
+        subjects,
+        marks,
+        semester_marks
+    )
+
+
+# ================================================================
+# 10. CLASS ANALYTICS
+# ================================================================
+
+def class_analytics(students):
+    """Display class-level performance analytics."""
+    print()
+    print_separator()
+    print("                         CLASS ANALYTICS")
+    print_separator()
+
+    if not students:
+        print("No student records available.")
+        print("Evaluate at least one student first.")
+        print_separator()
+        return
+
+    averages = [
+        student["average"]
+        for student in students
+    ]
+
+    # Only students who pass all subjects have a CGPA.
+    valid_cgpas = [
+        student["cgpa"]
+        for student in students
+        if student["cgpa"] is not None
+    ]
+
+    total = len(students)
+    class_average = sum(averages) / total
+
+    if valid_cgpas:
+        average_cgpa = sum(valid_cgpas) / len(valid_cgpas)
+    else:
+        average_cgpa = None
+
+    passed = sum(
+        student["result"] == "PASS"
+        for student in students
+    )
+
+    failed = total - passed
+
+    at_risk = sum(
+        student["at_risk"]
+        for student in students
+    )
+
+    highest = max(
+        students,
+        key=lambda student: student["average"]
+    )
+
+    lowest = min(
+        students,
+        key=lambda student: student["average"]
+    )
+
+    print(f"Total Students    : {total}")
+    print(f"Class Average     : {class_average:.2f}%")
+
+    if average_cgpa is None:
+        print("Average CGPA      : N/A (No student has a valid CGPA)")
+    else:
+        print(
+            f"Average CGPA      : {average_cgpa:.2f} "
+            f"(passing students only)"
+        )
+
+    print(
+        f"Pass Rate         : "
+        f"{(passed / total) * 100:.2f}%"
+    )
+
+    print(f"Passed            : {passed}")
+    print(f"Failed            : {failed}")
+    print(f"At-Risk Students  : {at_risk}")
+
+    print(
+        f"Highest Average   : "
+        f"{highest['average']:.2f}% "
+        f"({highest['name']})"
+    )
+
+    print(
+        f"Lowest Average    : "
+        f"{lowest['average']:.2f}% "
+        f"({lowest['name']})"
+    )
+
+    # ------------------------------------------------------------
+    # Grade distribution
+    # ------------------------------------------------------------
+
+    grade_counts = {
+        "A+": 0,
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "F": 0
+    }
+
+    for student in students:
+        grade_counts[student["grade"]] += 1
+
+    print_separator("-")
+    print("OVERALL GRADE DISTRIBUTION")
+
+    for grade, count in grade_counts.items():
+        print(
+            f"{grade:<3}: "
+            f"{'█' * count} "
+            f"({count})"
+        )
+
+    # ------------------------------------------------------------
+    # Trend distribution
+    # ------------------------------------------------------------
+
+    trend_counts = {
+        "Improving": 0,
+        "Declining": 0,
+        "Stable": 0,
+        "Insufficient Data": 0
+    }
+
+    for student in students:
+        trend = analyze_trend(
+            student["semester_marks"]
+        )
+
+        trend_counts[trend] += 1
+
+    print_separator("-")
+    print("TREND DISTRIBUTION")
+
+    for trend, count in trend_counts.items():
+        print(
+            f"{trend:<18}: {count}"
+        )
+
+    # ------------------------------------------------------------
+    # Subject-wise class averages
+    # ------------------------------------------------------------
+
+    print_separator("-")
+    print("SUBJECT-WISE CLASS AVERAGES")
+
+    totals = {}
+    counts = {}
+
+    for student in students:
+        for data in student["subject_data"]:
+            subject = data["subject"]
+
+            totals[subject] = (
+                totals.get(subject, 0)
+                + data["marks"]
+            )
+
+            counts[subject] = (
+                counts.get(subject, 0)
+                + 1
+            )
+
+    for subject in totals:
+        subject_average = (
+            totals[subject] / counts[subject]
+        )
+
+        print(
+            f"{subject:<25}: "
+            f"{subject_average:.2f}%"
+        )
+
+    # ------------------------------------------------------------
+    # Failed subject frequency
+    # ------------------------------------------------------------
+
+    print_separator("-")
+    print("MOST COMMON FAILED SUBJECTS")
+
+    failed_subject_counts = {}
+
+    for student in students:
+        failed_subjects = get_failed_subjects(
+            student["subjects"],
+            student["subject_marks"]
+        )
+
+        for subject in failed_subjects:
+            failed_subject_counts[subject] = (
+                failed_subject_counts.get(subject, 0) + 1
+            )
+
+    if failed_subject_counts:
+        sorted_subjects = sorted(
+            failed_subject_counts.items(),
+            key=lambda item: item[1],
+            reverse=True
+        )
+
+        for subject, count in sorted_subjects:
+            print(
+                f"{subject:<25}: "
+                f"{count} student(s)"
+            )
+    else:
+        print("No failed subjects recorded.")
+
+    print_separator()
+
+
+# ================================================================
+# 11. STUDENT LIST
+# ================================================================
+
+def display_all_students(students):
+    """Display all saved student records."""
+    print()
+    print_separator()
+    print("                         STUDENT RECORDS")
+    print_separator()
+
+    if not students:
+        print("No Student Records Yet.")
+        print("Evaluate your first student to create a record.")
+        print_separator()
+        return
+
+    print(
+        f"{'No.':<5}"
+        f"{'Name':<20}"
+        f"{'Average':<10}"
+        f"{'CGPA':<14}"
+        f"{'Grade':<8}"
+        f"{'Result':<9}"
+    )
+
+    print("-" * 82)
+
+    for number, student in enumerate(
+        students,
+        start=1
+    ):
+        if student["cgpa"] is None:
+            cgpa_display = "N/A"
+        else:
+            cgpa_display = f"{student['cgpa']:.2f}"
+
+        print(
+            f"{number:<5}"
+            f"{student['name'][:19]:<20}"
+            f"{student['average']:<10.1f}"
+            f"{cgpa_display:<14}"
+            f"{student['grade']:<8}"
+            f"{student['result']:<9}"
+        )
+
+    print_separator()
+
+
+# ================================================================
+# 12. SEARCH
+# ================================================================
+
+def search_students(students):
+    """Search student records by name."""
+    if not students:
+        print("No student records available.")
+        return
+
+    search = input(
+        "Enter student name to search: "
+    ).strip().lower()
+
+    if not search:
+        print("ERROR: Search term cannot be empty.")
+        return
+
+    results = [
+        student
+        for student in students
+        if search in student["name"].lower()
+    ]
+
+    print()
+    print_separator()
+    print("SEARCH RESULTS")
+    print_separator()
+
+    if not results:
+        print("No students found.")
+
+    else:
+        for student in results:
+            if student["cgpa"] is None:
+                cgpa_text = "N/A"
+            else:
+                cgpa_text = f"{student['cgpa']:.2f}"
+
+            print(
+                f"{student['name']} | "
+                f"Average: {student['average']:.1f}% | "
+                f"CGPA: {cgpa_text} | "
+                f"Grade: {student['grade']} | "
+                f"Result: {student['result']} | "
+                f"Trend: "
+                f"{analyze_trend(student['semester_marks'])}"
+            )
+
+    print_separator()
+
+
+# ================================================================
+# 13. FILTER
+# ================================================================
+
+def filter_students(students):
+    """Filter students by result or risk status."""
+    if not students:
+        print("No student records available.")
+        return
+
+    print()
+    print("1. All Students")
+    print("2. Passed Students")
+    print("3. Failed Students")
+    print("4. At-Risk Students")
+
+    choice = input(
+        "Choose filter: "
+    ).strip()
+
+    if choice == "1":
+        filtered = students
+
+    elif choice == "2":
+        filtered = [
+            student
+            for student in students
+            if student["result"] == "PASS"
+        ]
+
+    elif choice == "3":
+        filtered = [
+            student
+            for student in students
+            if student["result"] == "FAIL"
+        ]
+
+    elif choice == "4":
+        filtered = [
+            student
+            for student in students
+            if student["at_risk"]
+        ]
+
+    else:
+        print("ERROR: Invalid filter.")
+        return
+
+    display_all_students(filtered)
+
+
+# ================================================================
+# 14. DEMO DATA
+# ================================================================
+
+def load_demo_data():
+    """
+    Load fictional student records for demonstration.
+
+    Includes:
+    - High performer
+    - Good performer
+    - Average performer
+    - Passing but weak performer
+    - Failed / at-risk performer
+    """
+
+    demo = [
+        (
+            "Ananya",
+            [
+                "Python",
+                "DBMS",
+                "DSA",
+                "Mathematics",
+                "Networks"
+            ],
+            [92, 95, 91, 88, 94],
+            [78, 84, 89]
+        ),
+
+        (
+            "Rahul",
+            [
+                "Python",
+                "DBMS",
+                "DSA",
+                "Mathematics",
+                "Networks"
+            ],
+            [78, 82, 75, 76, 79],
+            [62, 68, 74]
+        ),
+
+        (
+            "Arjun",
+            [
+                "Python",
+                "DBMS",
+                "DSA",
+                "Mathematics",
+                "Networks"
+            ],
+            [62, 65, 58, 60, 61],
+            [82, 76, 69]
+        ),
+
+        (
+            "Priya",
+            [
+                "Python",
+                "DBMS",
+                "DSA",
+                "Mathematics",
+                "Networks"
+            ],
+            [48, 52, 45, 54, 46],
+            [45, 49]
+        ),
+
+        (
+            "Rohan",
+            [
+                "Python",
+                "DBMS",
+                "DSA",
+                "Mathematics",
+                "Networks"
+            ],
+            [32, 41, 38, 35, 36],
+            [48, 41]
+        )
+    ]
+
+    students = []
+
+    for name, subjects, marks, previous in demo:
+        current_average = calculate_average(marks)
+
+        semester_marks = (
+            previous
+            + [current_average]
+        )
+
+        students.append(
+            create_student_record(
+                name,
+                subjects,
+                marks,
+                semester_marks
+            )
+        )
+
+    return students
+
+
+# ================================================================
+# 15. STUDENT SELECTION
+# ================================================================
+
+def choose_student(students):
+    """Allow the user to choose a student by record number."""
+    if not students:
+        print("No student records available.")
+        return None
+
+    display_all_students(students)
+
+    try:
+        choice = int(
+            input("Enter student number: ")
+        )
+
+        if 1 <= choice <= len(students):
+            return students[choice - 1]
+
+        print("ERROR: Invalid student number.")
+
+    except ValueError:
+        print(
+            "ERROR: Please enter a valid whole number."
+        )
+
+    return None
+
+
+# ================================================================
+# 16. MAIN MENU
+# ================================================================
+
+def show_menu():
+    """Display the main application menu."""
+    print()
+    print_separator()
+    print("                           SMARTGRADE")
+    print("          5-Subject Student Performance & CGPA System")
+    print_separator()
+
+    print("1. Evaluate New Student")
+    print("2. View All Students")
+    print("3. View Student Report")
+    print("4. Search Student")
+    print("5. Filter Students")
+    print("6. Class Analytics")
+    print("7. Load Demo Data")
+    print("8. Clear All Records")
+    print("9. Exit")
+
+    print_separator()
+
+
+def main():
+    """Run the SmartGrade application."""
+    students = []
+
+    while True:
+        show_menu()
+
+        choice = input(
+            "Enter your choice (1-9): "
+        ).strip()
+
+        # --------------------------------------------------------
+        # OPTION 1 - NEW STUDENT
+        # --------------------------------------------------------
+
+        if choice == "1":
+            try:
+                student = evaluate_new_student()
+
+                students.append(student)
+
+                print()
+                print("Student evaluated successfully!")
+
+                display_student_report(student)
+
+            except ValueError as error:
+                print(f"ERROR: {error}")
+
+        # --------------------------------------------------------
+        # OPTION 2 - ALL STUDENTS
+        # --------------------------------------------------------
+
+        elif choice == "2":
+            display_all_students(students)
+
+        # --------------------------------------------------------
+        # OPTION 3 - STUDENT REPORT
+        # --------------------------------------------------------
+
+        elif choice == "3":
+            student = choose_student(students)
+
+            if student:
+                display_student_report(student)
+
+        # --------------------------------------------------------
+        # OPTION 4 - SEARCH
+        # --------------------------------------------------------
+
+        elif choice == "4":
+            search_students(students)
+
+        # --------------------------------------------------------
+        # OPTION 5 - FILTER
+        # --------------------------------------------------------
+
+        elif choice == "5":
+            filter_students(students)
+
+        # --------------------------------------------------------
+        # OPTION 6 - CLASS ANALYTICS
+        # --------------------------------------------------------
+
+        elif choice == "6":
+            class_analytics(students)
+
+        # --------------------------------------------------------
+        # OPTION 7 - DEMO DATA
+        # --------------------------------------------------------
+
+        elif choice == "7":
+            demo_students = load_demo_data()
+
+            students.extend(demo_students)
+
+            print(
+                f"{len(demo_students)} demo student "
+                "records loaded successfully."
+            )
+
+        # --------------------------------------------------------
+        # OPTION 8 - CLEAR RECORDS
+        # --------------------------------------------------------
+
+        elif choice == "8":
+            if not students:
+                print("There are no records to clear.")
+
+            elif get_yes_no(
+                "Are you sure you want to clear "
+                "all records? (Y/N): "
+            ):
+                students.clear()
+                print(
+                    "All student records have been cleared."
+                )
+
+            else:
+                print("Clear operation cancelled.")
+
+        # --------------------------------------------------------
+        # OPTION 9 - EXIT
+        # --------------------------------------------------------
+
+        elif choice == "9":
+            print()
+            print("Thank you for using SmartGrade!")
+            print(
+                "Turn marks into meaningful academic insights."
+            )
+            break
+
+        # --------------------------------------------------------
+        # INVALID MENU OPTION
+        # --------------------------------------------------------
+
+        else:
+            print(
+                "ERROR: Please choose a number from 1 to 9."
+            )
+
+
+# ================================================================
+# PROGRAM ENTRY POINT
+# ================================================================
+
+if __name__ == "__main__":
+    main()
