@@ -1,0 +1,252 @@
+"""
+AttendAI — Smart Student Attendance & Academic Tracker
+Core Business Logic Implementation in Python
+"""
+
+from __future__ import annotations
+import math
+import csv
+import io
+from dataclasses import dataclass, asdict
+from enum import Enum
+from typing import List, Dict, Optional
+
+
+class AttendanceStatus(str, Enum):
+    PRESENT = "Present"
+    ABSENT = "Absent"
+    LATE = "Late"
+
+
+class RiskLevel(str, Enum):
+    SAFE = "Safe"
+    WATCH = "Watch"
+    AT_RISK = "At Risk"
+
+
+@dataclass
+class Settings:
+    school_name: str = "Global International School"
+    academic_year: str = "2025-2026"
+    warning_threshold: float = 85.0    # >= 85%: Safe, 75-84%: Watch
+    critical_threshold: float = 75.0   # < 75%: At Risk
+
+
+@dataclass
+class Student:
+    id: int
+    name: str
+    roll_no: str
+    class_name: str
+    attendance: float
+    total_classes: int
+    attended_classes: int
+    streak: int = 0
+    risk: RiskLevel = RiskLevel.SAFE
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["risk"] = self.risk.value
+        return data
+
+
+# ==============================================================================
+# 1. CORE ALGORITHMS & MATHEMATICAL FORMULAS
+# ==============================================================================
+
+def calculate_risk(
+    attendance_pct: float,
+    warning_threshold: float = 85.0,
+    critical_threshold: float = 75.0
+) -> RiskLevel:
+    """
+    Rule-based attendance classification:
+    - >= 85% : Safe
+    - 75% - 84%: Watch
+    - < 75%  : At Risk
+    """
+    if attendance_pct >= warning_threshold:
+        return RiskLevel.SAFE
+    elif attendance_pct >= critical_threshold:
+        return RiskLevel.WATCH
+    else:
+        return RiskLevel.AT_RISK
+
+
+def calculate_recovery_classes(
+    attended: int,
+    total: int,
+    target_pct: float
+) -> int:
+    """
+    Calculates consecutive classes 'x' needed to reach target_pct:
+    Formula:
+        (attended + x) / (total + x) >= target_pct / 100
+        x = ceil((target_pct * total - 100 * attended) / (100 - target_pct))
+    """
+    if total <= 0:
+        return 0
+
+    current_pct = (attended / total) * 100.0
+    if current_pct >= target_pct:
+        return 0
+
+    if target_pct >= 100.0:
+        return -1 if attended < total else 0
+
+    numerator = (target_pct * total) - (100.0 * attended)
+    denominator = 100.0 - target_pct
+
+    needed = math.ceil(numerator / denominator)
+    return max(0, needed)
+
+
+def calculate_what_if(
+    attended: int,
+    total: int,
+    upcoming_classes: int,
+    missed_in_upcoming: int = 0
+) -> Dict[str, float]:
+    """
+    Simulates projected attendance across upcoming classes.
+    """
+    current_pct = (attended / total * 100.0) if total > 0 else 0.0
+    projected_total = total + upcoming_classes
+    attended_in_upcoming = max(0, upcoming_classes - missed_in_upcoming)
+    projected_attended = attended + attended_in_upcoming
+
+    projected_pct = (
+        (projected_attended / projected_total * 100.0)
+        if projected_total > 0 else 0.0
+    )
+
+    return {
+        "current_pct": round(current_pct, 2),
+        "projected_pct": round(projected_pct, 2),
+        "net_diff_pct": round(projected_pct - current_pct, 2),
+        "attended_total": projected_attended,
+        "classes_total": projected_total
+    }
+
+
+def record_student_attendance(
+    student: Student,
+    status: AttendanceStatus,
+    settings: Settings = Settings()
+) -> Student:
+    """
+    Updates attendance counts and streak:
+    - PRESENT: attended + 1, total + 1, streak + 1
+    - LATE:    attended + 1, total + 1, streak resets to 0
+    - ABSENT:  attended + 0, total + 1, streak resets to 0
+    """
+    new_attended = student.attended_classes
+    new_total = student.total_classes + 1
+    new_streak = student.streak
+
+    if status == AttendanceStatus.PRESENT:
+        new_attended += 1
+        new_streak += 1
+    elif status == AttendanceStatus.LATE:
+        new_attended += 1
+        new_streak = 0
+    elif status == AttendanceStatus.ABSENT:
+        new_streak = 0
+
+    new_pct = round((new_attended / new_total) * 100.0, 1) if new_total > 0 else 0.0
+    new_risk = calculate_risk(
+        new_pct,
+        warning_threshold=settings.warning_threshold,
+        critical_threshold=settings.critical_threshold
+    )
+
+    student.attended_classes = new_attended
+    student.total_classes = new_total
+    student.attendance = new_pct
+    student.streak = new_streak
+    student.risk = new_risk
+
+    return student
+
+
+# ==============================================================================
+# 2. ATTENDANCE MANAGER & SERVICE
+# ==============================================================================
+
+class AttendAITracker:
+    def __init__(self, settings: Optional[Settings] = None):
+        self.settings = settings or Settings()
+        self.students: Dict[int, Student] = {}
+        self._load_default_mock_data()
+
+    def _load_default_mock_data(self):
+        raw_students = [
+            (1, "Aarav", "101", "10-A", 86.0, 60, 52, 12),
+            (2, "Ananya", "102", "10-A", 92.0, 60, 55, 18),
+            (3, "Arjun", "103", "10-A", 78.0, 60, 47, 3),
+            (4, "Diya", "104", "10-A", 71.0, 60, 43, 0),
+            (5, "Ishaan", "105", "10-A", 88.0, 60, 53, 8),
+            (6, "Kavya", "106", "10-B", 95.0, 60, 57, 20),
+            (7, "Rahul", "107", "10-B", 65.0, 60, 39, 0),
+            (8, "Priya", "108", "10-B", 82.0, 60, 49, 13),
+            (9, "Aditya", "109", "10-B", 90.0, 60, 54, 10),
+            (10, "Sneha", "110", "10-B", 85.0, 60, 51, 5),
+            (11, "Rohan", "111", "10-A", 74.0, 60, 44, 1),
+            (12, "Meera", "112", "10-A", 98.0, 60, 59, 40),
+            (13, "Vikram", "113", "10-B", 76.0, 60, 46, 2),
+            (14, "Aditi", "114", "10-A", 89.0, 60, 53, 6),
+            (15, "Karan", "115", "10-A", 81.0, 60, 49, 4),
+            (16, "Neha", "116", "10-B", 94.0, 60, 56, 15),
+            (17, "Sahil", "117", "10-B", 68.0, 60, 41, 0),
+            (18, "Pooja", "118", "10-A", 87.0, 60, 52, 9),
+            (19, "Varun", "119", "10-A", 79.0, 60, 47, 3),
+            (20, "Nisha", "120", "10-B", 91.0, 60, 55, 11),
+        ]
+
+        for sid, name, roll, cls, att, tot, atd, strk in raw_students:
+            risk = calculate_risk(att, self.settings.warning_threshold, self.settings.critical_threshold)
+            self.students[sid] = Student(
+                id=sid, name=name, roll_no=roll, class_name=cls,
+                attendance=att, total_classes=tot, attended_classes=atd,
+                streak=strk, risk=risk
+            )
+
+    def get_all_students(self) -> List[Student]:
+        return list(self.students.values())
+
+    def get_student(self, student_id: int) -> Optional[Student]:
+        return self.students.get(student_id)
+
+    def get_dashboard_metrics(self) -> Dict[str, object]:
+        students = self.get_all_students()
+        total = len(students)
+        overall_pct = sum(s.attendance for s in students) / total if total > 0 else 0.0
+
+        return {
+            "total_students": total,
+            "overall_attendance_pct": round(overall_pct, 1),
+            "safe_count": sum(1 for s in students if s.risk == RiskLevel.SAFE),
+            "watch_count": sum(1 for s in students if s.risk == RiskLevel.WATCH),
+            "at_risk_count": sum(1 for s in students if s.risk == RiskLevel.AT_RISK)
+        }
+
+    def generate_recovery_plan(self, student_id: int, target_pct: float = 75.0) -> Dict[str, object]:
+        student = self.get_student(student_id)
+        if not student:
+            raise ValueError(f"Student ID {student_id} not found.")
+
+        needed = calculate_recovery_classes(student.attended_classes, student.total_classes, target_pct)
+        return {
+            "name": student.name,
+            "current_attendance": student.attendance,
+            "target_attendance": target_pct,
+            "consecutive_classes_needed": needed
+        }
+
+    def export_csv(self) -> str:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Name", "Roll No", "Class", "Attendance %", "Streak", "Risk"])
+        for s in self.get_all_students():
+            writer.writerow([s.id, s.name, s.roll_no, s.class_name, f"{s.attendance:.1f}", s.streak, s.risk.value])
+        return output.getvalue()
