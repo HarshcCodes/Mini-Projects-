@@ -1,0 +1,594 @@
+"""
+================================================================================
+RETAIL SALES DASHBOARD - CORE BUSINESS LOGIC ENGINE
+================================================================================
+1. Data Ingestion & Schema Validation
+2. Multi-Dimensional Data Filtering
+3. Executive KPI Engine (with Period-over-Period Delta calculation)
+4. Feature A: Data Storyteller (Auto-Insights Heuristic Engine)
+5. Feature B: What-If Business Simulator (Elasticity, Projections & Verdict)
+6. Feature C: Business Health Score (0-100 Gauge, 4-Pillar Scoring & Breakdown)
+7. Feature D: Anomaly Radar (Daily Z-Score Detection & Diagnostic Inference)
+8. In-Memory Matplotlib Visualizations (Agg Backend -> Base64 PNG)
+================================================================================
+"""
+
+import io
+import base64
+from datetime import datetime, timedelta
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")  # Headless non-interactive backend
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+from matplotlib.patches import Wedge, Circle
+
+# ==============================================================================
+# 1. DATA INGESTION & SCHEMA VALIDATION
+# ==============================================================================
+
+REQUIRED_COLUMNS = [
+    "Order_ID", "Date", "Product", "Category", "Region", "Store",
+    "Quantity", "Unit_Price", "Discount", "Sales", "Profit", "Customer_Segment",
+]
+
+def validate_and_load_csv(filepath: str) -> pd.DataFrame:
+    """
+    Validates CSV schema case-insensitively, casts numeric types,
+    and returns a standardized, chronologically sorted DataFrame.
+    """
+    df = pd.read_csv(filepath)
+    lower_map = {col.lower(): col for col in REQUIRED_COLUMNS}
+    rename_dict = {}
+
+    for col in df.columns:
+        if col.lower() in lower_map:
+            rename_dict[col] = lower_map[col.lower()]
+
+    missing = [c for c in REQUIRED_COLUMNS if c not in rename_dict.values()]
+    if missing:
+        raise ValueError(f"Schema Validation Failed. Missing required columns: {missing}")
+
+    df = df.rename(columns=rename_dict)
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"])
+
+    for col in ["Quantity", "Unit_Price", "Discount", "Sales", "Profit"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    # Normalize discount if provided as percentage (e.g. 20 -> 0.20)
+    if df["Discount"].max() > 1.0:
+        df["Discount"] = df["Discount"] / 100.0
+
+    return df.sort_values("Date").reset_index(drop=True)
+
+
+# ==============================================================================
+# 2. MULTI-DIMENSIONAL FILTERING
+# ==============================================================================
+
+def apply_filters(
+    df: pd.DataFrame,
+    start_date: str = None,
+    end_date: str = None,
+    category: str = "All",
+    region: str = "All",
+    segment: str = "All",
+) -> pd.DataFrame:
+    """Filters dataset across temporal, categorical, geographic, and segment dimensions."""
+    filtered = df.copy()
+
+    if start_date:
+        filtered = filtered[filtered["Date"] >= pd.to_datetime(start_date)]
+    if end_date:
+        filtered = filtered[filtered["Date"] <= pd.to_datetime(end_date)]
+
+    if category and category.lower() != "all":
+        filtered = filtered[filtered["Category"].str.lower() == category.lower()]
+
+    if region and region.lower() != "all":
+        filtered = filtered[filtered["Region"].str.lower() == region.lower()]
+
+    if segment and segment.lower() != "all":
+        filtered = filtered[filtered["Customer_Segment"].str.lower() == segment.lower()]
+
+    return filtered.reset_index(drop=True)
+
+
+# ==============================================================================
+# 3. EXECUTIVE KPI ENGINE (WITH PERIOD-OVER-PERIOD COMPARISON)
+# ==============================================================================
+
+def calculate_kpis(filtered_df: pd.DataFrame, full_df: pd.DataFrame = None) -> dict:
+    """
+    Computes 6 primary KPIs and compares them against the immediately preceding period
+    of matching length to establish performance momentum.
+    """
+    if filtered_df.empty:
+        return {"error": "No records in filtered slice."}
+
+    # Current period metrics
+    sales = float(filtered_df["Sales"].sum())
+    profit = float(filtered_df["Profit"].sum())
+    margin = (profit / sales * 100.0) if sales > 0 else 0.0
+    orders = int(filtered_df["Order_ID"].nunique())
+    aov = (sales / orders) if orders > 0 else 0.0
+
+    prod_sales = filtered_df.groupby("Product")["Sales"].sum()
+    best_product = prod_sales.idxmax() if not prod_sales.empty else "N/A"
+    best_product_sales = float(prod_sales.max()) if not prod_sales.empty else 0.0
+
+    # Period-over-period comparison window
+    min_date = filtered_df["Date"].min()
+    max_date = filtered_df["Date"].max()
+    duration = (max_date - min_date).days + 1
+
+    prev_end = min_date - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=duration - 1)
+
+    sales_delta, profit_delta, margin_delta, orders_delta, aov_delta, best_prod_delta = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    if full_df is not None:
+        prev_df = full_df[(full_df["Date"] >= prev_start) & (full_df["Date"] <= prev_end)]
+        if not prev_df.empty:
+            p_sales = float(prev_df["Sales"].sum())
+            p_profit = float(prev_df["Profit"].sum())
+            p_margin = (p_profit / p_sales * 100.0) if p_sales > 0 else 0.0
+            p_orders = int(prev_df["Order_ID"].nunique())
+            p_aov = (p_sales / p_orders) if p_orders > 0 else 0.0
+            p_best_prod_sales = float(prev_df.groupby("Product")["Sales"].sum().get(best_product, 0.0))
+
+            def pct_diff(curr, prev):
+                return round(((curr - prev) / abs(prev)) * 100.0, 1) if prev != 0 else 0.0
+
+            sales_delta = pct_diff(sales, p_sales)
+            profit_delta = pct_diff(profit, p_profit)
+            margin_delta = round(margin - p_margin, 1)
+            orders_delta = pct_diff(orders, p_orders)
+            aov_delta = pct_diff(aov, p_aov)
+            best_prod_delta = pct_diff(best_product_sales, p_best_prod_sales)
+
+    return {
+        "total_sales": round(sales, 2),
+        "total_sales_formatted": f"${sales:,.2f}",
+        "total_sales_delta": sales_delta,
+        "total_profit": round(profit, 2),
+        "total_profit_formatted": f"${profit:,.2f}",
+        "total_profit_delta": profit_delta,
+        "profit_margin": round(margin, 1),
+        "profit_margin_formatted": f"{margin:.1f}%",
+        "profit_margin_delta": margin_delta,
+        "total_orders": orders,
+        "total_orders_formatted": f"{orders:,}",
+        "total_orders_delta": orders_delta,
+        "average_order_value": round(aov, 2),
+        "average_order_value_formatted": f"${aov:,.2f}",
+        "average_order_value_delta": aov_delta,
+        "best_product": best_product,
+        "best_product_sales": f"${best_product_sales:,.2f}",
+        "best_product_delta": best_prod_delta,
+    }
+
+
+# ==============================================================================
+# 4. FEATURE A: "DATA STORYTELLER" (AUTO-INSIGHTS ENGINE)
+# ==============================================================================
+
+def generate_data_storyteller_insights(df: pd.DataFrame, anomalies: list = None) -> list:
+    """
+    Feature A: Generates 5-7 plain-English executive narratives using pure Pandas
+    heuristics without external AI tokens or API calls.
+    """
+    if df.empty or len(df) < 5:
+        return ["Insufficient data to infer statistical narratives."]
+
+    insights = []
+    total_sales = df["Sales"].sum()
+    total_profit = df["Profit"].sum()
+
+    # Story 1: Category Leadership & Geographical Anchor
+    cat_grp = df.groupby("Category").agg(Sales=("Sales", "sum"), Profit=("Profit", "sum")).reset_index()
+    if not cat_grp.empty:
+        top_cat = cat_grp.sort_values("Sales", ascending=False).iloc[0]
+        cat_share = (top_cat["Sales"] / total_sales) * 100.0 if total_sales > 0 else 0
+        cat_margin = (top_cat["Profit"] / top_cat["Sales"]) * 100.0 if top_cat["Sales"] > 0 else 0
+        cat_df = df[df["Category"] == top_cat["Category"]]
+        top_reg = cat_df.groupby("Region")["Sales"].sum().idxmax() if not cat_df.empty else "N/A"
+
+        insights.append(
+            f"Category Leadership: {top_cat['Category']} generated ${top_cat['Sales']:,.0f} "
+            f"({cat_share:.1f}% of total sales) with a {cat_margin:.1f}% operating margin, "
+            f"driven mainly by strong demand in the {top_reg} region."
+        )
+
+    # Story 2: Discount Elasticity & Margin Erosion
+    low_disc = df[df["Discount"] <= 0.15]
+    high_disc = df[df["Discount"] > 0.15]
+    if len(low_disc) > 0 and len(high_disc) > 0:
+        low_m = (low_disc["Profit"].sum() / low_disc["Sales"].sum()) * 100.0 if low_disc["Sales"].sum() > 0 else 0
+        high_m = (high_disc["Profit"].sum() / high_disc["Sales"].sum()) * 100.0 if high_disc["Sales"].sum() > 0 else 0
+        m_diff = low_m - high_m
+        loss_orders = int((high_disc["Profit"] < 0).sum())
+
+        if m_diff > 5:
+            insights.append(
+                f"Discount Impact: Discounts above 15% reduced profit margin by {m_diff:.1f}% "
+                f"(down from {low_m:.1f}% to {high_m:.1f}%), resulting in {loss_orders} unprofitable transactions."
+            )
+        else:
+            insights.append(
+                f"Pricing Power: Promotional discounting remains healthy; higher discount tiers only shifted "
+                f"margins by {abs(m_diff):.1f}%, sustaining steady profitability."
+            )
+
+    # Story 3: Pareto Revenue Concentration (Top 3 SKUs)
+    prod_sales = df.groupby("Product")["Sales"].sum().sort_values(ascending=False)
+    if len(prod_sales) >= 3:
+        top3_sales = prod_sales.iloc[:3].sum()
+        top3_share = (top3_sales / total_sales) * 100.0 if total_sales > 0 else 0
+        top3_names = ", ".join(prod_sales.index[:3])
+        insights.append(
+            f"Sales Concentration: Top 3 products ({top3_names}) capture ${top3_sales:,.0f} "
+            f"({top3_share:.1f}%) of overall revenue, indicating key SKU dependency."
+        )
+
+    # Story 4: Regional Efficiency Champion
+    reg_grp = df.groupby("Region").agg(Sales=("Sales", "sum"), Profit=("Profit", "sum")).reset_index()
+    if len(reg_grp) > 1:
+        reg_grp["Margin"] = (reg_grp["Profit"] / reg_grp["Sales"]) * 100.0
+        best_reg = reg_grp.sort_values("Profit", ascending=False).iloc[0]
+        insights.append(
+            f"Regional Champion: {best_reg['Region']} region recorded the highest net profit "
+            f"(${best_reg['Profit']:,.0f}) with an exceptional {best_reg['Margin']:.1f}% margin."
+        )
+
+    # Story 5: Customer Segment Purchasing Power
+    seg_grp = df.groupby("Customer_Segment").agg(Sales=("Sales", "sum"), Orders=("Order_ID", "nunique")).reset_index()
+    if len(seg_grp) > 1:
+        seg_grp["AOV"] = seg_grp["Sales"] / seg_grp["Orders"]
+        best_seg = seg_grp.sort_values("AOV", ascending=False).iloc[0]
+        overall_aov = total_sales / max(df["Order_ID"].nunique(), 1)
+        aov_delta = ((best_seg["AOV"] - overall_aov) / overall_aov) * 100.0 if overall_aov > 0 else 0
+        insights.append(
+            f"Segment Value: {best_seg['Customer_Segment']} segment delivers the highest Average Order Value "
+            f"of ${best_seg['AOV']:,.2f}, outperforming the portfolio average by +{aov_delta:.1f}%."
+        )
+
+    # Story 6: Weekend Acceleration
+    df_copy = df.copy()
+    df_copy["Is_Weekend"] = df_copy["Date"].dt.day_of_week >= 5
+    weekend_sales = df_copy[df_copy["Is_Weekend"]].groupby(df_copy["Date"].dt.date)["Sales"].sum().mean()
+    weekday_sales = df_copy[~df_copy["Is_Weekend"]].groupby(df_copy["Date"].dt.date)["Sales"].sum().mean()
+
+    if pd.notnull(weekend_sales) and pd.notnull(weekday_sales) and weekday_sales > 0:
+        w_diff = ((weekend_sales - weekday_sales) / weekday_sales) * 100.0
+        if w_diff > 5:
+            insights.append(
+                f"Temporal Trends: Weekend daily sales volume is {w_diff:.1f}% higher than weekdays "
+                f"(avg ${weekend_sales:,.0f}/day vs ${weekday_sales:,.0f}/day on weekdays)."
+            )
+
+    # Story 7: Anomaly Summary
+    if anomalies and len(anomalies) > 0:
+        spikes = [a for a in anomalies if a["type"] == "spike"]
+        drops = [a for a in anomalies if a["type"] == "drop"]
+        top_spike = spikes[0] if spikes else None
+        diag = f" (Peak spike on {top_spike['date']} at ${top_spike['sales']:,.0f}: {top_spike['reason']})" if top_spike else ""
+        insights.append(
+            f"Statistical Signals: Anomaly Radar identified {len(anomalies)} severe outliers "
+            f"({len(spikes)} spikes, {len(drops)} drops){diag}."
+        )
+
+    return insights[:7]
+
+
+# ==============================================================================
+# 5. FEATURE B: "WHAT-IF SIMULATOR"
+# ==============================================================================
+
+def run_what_if_simulation(
+    df: pd.DataFrame,
+    price_change_pct: float = 0.0,
+    discount_change_pct: float = 0.0,
+    quantity_change_pct: float = 0.0,
+    theme: str = "light",
+) -> dict:
+    """
+    Feature B: Simulates modified economic elasticity variables against the active dataset.
+    Calculates projected revenue, profit, and margin delta, generates an executive verdict,
+    and returns an in-memory Matplotlib comparison chart.
+    """
+    if df.empty:
+        return {"error": "Empty dataset"}
+
+    base_sales = float(df["Sales"].sum())
+    base_profit = float(df["Profit"].sum())
+    base_margin = (base_profit / base_sales * 100.0) if base_sales > 0 else 0.0
+
+    # Underlying unit cost: Cost = (Sales - Profit) / Quantity
+    qty_safe = df["Quantity"].replace(0, 1)
+    unit_cost = ((df["Sales"] - df["Profit"]) / qty_safe).clip(lower=0.0)
+
+    # Adjust parameters
+    p_factor = 1.0 + (price_change_pct / 100.0)
+    q_factor = max(0.0, 1.0 + (quantity_change_pct / 100.0))
+    d_delta = discount_change_pct / 100.0
+
+    sim_unit_price = df["Unit_Price"] * p_factor
+    sim_discount = (df["Discount"] + d_delta).clip(lower=0.0, upper=0.85)
+    sim_quantity = df["Quantity"] * q_factor
+
+    sim_sales = sim_quantity * sim_unit_price * (1.0 - sim_discount)
+    sim_profit = sim_sales - (sim_quantity * unit_cost)
+
+    proj_sales = float(sim_sales.sum())
+    proj_profit = float(sim_profit.sum())
+    proj_margin = (proj_profit / proj_sales * 100.0) if proj_sales > 0 else 0.0
+
+    sales_diff_pct = ((proj_sales - base_sales) / base_sales * 100.0) if base_sales > 0 else 0
+    profit_diff_pct = ((proj_profit - base_profit) / abs(base_profit) * 100.0) if base_profit != 0 else 0
+    margin_diff = proj_margin - base_margin
+
+    # Plain-English Executive Verdict
+    if profit_diff_pct >= 5.0 and sales_diff_pct >= 0.0:
+        verdict = f"Profitable Growth: Revenue expands by {sales_diff_pct:+.1f}% while profit rises {profit_diff_pct:+.1f}%. Margin improves to {proj_margin:.1f}%."
+    elif profit_diff_pct >= 5.0 and sales_diff_pct < 0.0:
+        verdict = f"Margin Protection: Volume dips {sales_diff_pct:.1f}%, but net profit surges +{profit_diff_pct:.1f}% due to pricing discipline."
+    elif sales_diff_pct > 5.0 and profit_diff_pct < -5.0:
+        verdict = f"Volume Trap: Sales expand +{sales_diff_pct:.1f}%, but discounting cuts profit by {profit_diff_pct:.1f}%. Extra volume fails to cover margin erosion."
+    elif profit_diff_pct < -5.0:
+        verdict = f"Value Destruction: Both revenue ({sales_diff_pct:.1f}%) and profit ({profit_diff_pct:.1f}%) decline simultaneously. Avoid this scenario."
+    else:
+        verdict = f"Neutral Impact: Modest shift in revenue ({sales_diff_pct:+.1f}%) and profit ({profit_diff_pct:+.1f}%). Profit margin remains steady at {proj_margin:.1f}%."
+
+    # Render Matplotlib Comparison Bar Chart
+    bg_color = "#161b22" if theme == "dark" else "#ffffff"
+    text_color = "#e6edf3" if theme == "dark" else "#1f2937"
+    grid_color = "#374151" if theme == "dark" else "#e5e7eb"
+
+    fig, ax = plt.subplots(figsize=(7.5, 3.8), dpi=100)
+    fig.patch.set_facecolor(bg_color)
+    ax.set_facecolor(bg_color)
+
+    categories = ["Total Revenue", "Total Profit"]
+    x = np.arange(len(categories))
+    width = 0.35
+
+    ax.bar(x - width/2, [base_sales, base_profit], width, label="Baseline", color="#64748b", alpha=0.85)
+    ax.bar(
+        x + width/2, [proj_sales, proj_profit], width,
+        label="Projected",
+        color=["#3b82f6", "#10b981" if proj_profit >= base_profit else "#ef4444"],
+        alpha=0.95
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, fontsize=11, fontweight="bold", color=text_color)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"${y*1e-3:.0f}k" if abs(y) >= 1000 else f"${y:.0f}"))
+    ax.grid(axis="y", linestyle="--", alpha=0.6, color=grid_color)
+    ax.tick_params(colors=text_color)
+    for s in ax.spines.values(): s.set_color(grid_color)
+
+    legend = ax.legend(frameon=True, facecolor=bg_color, edgecolor=grid_color)
+    for t in legend.get_texts(): t.set_color(text_color)
+    ax.set_title("What-If Simulation: Baseline vs. Projected Financials", fontsize=12, fontweight="bold", color=text_color)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor=bg_color)
+    plt.close(fig)
+    buf.seek(0)
+    chart_b64 = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+
+    return {
+        "baseline_sales": round(base_sales, 2),
+        "projected_sales": round(proj_sales, 2),
+        "sales_diff_pct": round(sales_diff_pct, 1),
+        "baseline_profit": round(base_profit, 2),
+        "projected_profit": round(proj_profit, 2),
+        "profit_diff_pct": round(profit_diff_pct, 1),
+        "baseline_margin": round(base_margin, 1),
+        "projected_margin": round(proj_margin, 1),
+        "margin_diff": round(margin_diff, 1),
+        "verdict": verdict,
+        "chart_base64": chart_b64,
+    }
+
+
+# ==============================================================================
+# 6. FEATURE C: "BUSINESS HEALTH SCORE" (0-100 GAUGE & PILLARS)
+# ==============================================================================
+
+def calculate_business_health_score(df: pd.DataFrame, theme: str = "light") -> dict:
+    """
+    Feature C: Evaluates 4 operational pillars (Growth, Margin, Discount Discipline, Stability)
+    out of 25 points each, returning a 0-100 score, factor breakdown, and a Matplotlib gauge chart.
+    """
+    if df.empty or len(df) < 5:
+        return {"total_score": 50, "rating": "Average"}
+
+    # Pillar 1: Growth Rate (0 - 25 pts)
+    df_s = df.sort_values("Date").reset_index(drop=True)
+    mid = len(df_s) // 2
+    f_sales = df_s.iloc[:mid]["Sales"].sum()
+    s_sales = df_s.iloc[mid:]["Sales"].sum()
+    growth_pct = ((s_sales - f_sales) / max(f_sales, 1)) * 100.0
+
+    if growth_pct >= 20.0: p1 = 25.0
+    elif growth_pct >= 10.0: p1 = 20.0 + (growth_pct - 10.0) * 0.5
+    elif growth_pct >= 0.0: p1 = 14.0 + (growth_pct) * 0.6
+    else: p1 = max(0.0, 14.0 + (growth_pct) * 0.6)
+
+    # Pillar 2: Profit Margin Health (0 - 25 pts)
+    total_sales = df["Sales"].sum()
+    total_profit = df["Profit"].sum()
+    margin = (total_profit / total_sales * 100.0) if total_sales > 0 else 0.0
+
+    if margin >= 42.0: p2 = 25.0
+    elif margin >= 30.0: p2 = 18.0 + (margin - 30.0) * (7.0 / 12.0)
+    elif margin >= 18.0: p2 = 10.0 + (margin - 18.0) * (8.0 / 12.0)
+    else: p2 = max(0.0, margin * 0.55)
+
+    # Pillar 3: Discount Discipline (0 - 25 pts)
+    avg_d = df["Discount"].mean() * 100.0
+    heavy_d = (df["Discount"] > 0.20).mean() * 100.0
+    penalty = (avg_d * 0.7) + (heavy_d * 0.5)
+    p3 = max(0.0, min(25.0, 25.0 - (penalty * 0.75)))
+
+    # Pillar 4: Sales Consistency / Stability (0 - 25 pts)
+    daily = df.groupby(df["Date"].dt.date)["Sales"].sum()
+    cv = (daily.std() / daily.mean()) if daily.mean() > 0 else 1.0  # Coefficient of Variation
+
+    if cv <= 0.40: p4 = 25.0
+    elif cv <= 0.65: p4 = 18.0 + (0.65 - cv) * (7.0 / 0.25)
+    elif cv <= 0.95: p4 = 10.0 + (0.95 - cv) * (8.0 / 0.30)
+    else: p4 = max(2.0, 10.0 - (cv - 0.95) * 12.0)
+
+    total_score = round(p1 + p2 + p3 + p4)
+    total_score = max(0, min(100, total_score))
+
+    if total_score >= 80: rating, r_color = "Excellent", "#10b981"
+    elif total_score >= 65: rating, r_color = "Healthy", "#3b82f6"
+    elif total_score >= 40: rating, r_color = "Average", "#f59e0b"
+    else: rating, r_color = "Critical", "#ef4444"
+
+    pillars = [
+        {"name": "Sales Growth", "score": round(p1, 1), "metric": f"{growth_pct:+.1f}% half-over-half"},
+        {"name": "Profit Margin", "score": round(p2, 1), "metric": f"{margin:.1f}% margin"},
+        {"name": "Discount Discipline", "score": round(p3, 1), "metric": f"{avg_d:.1f}% avg discount"},
+        {"name": "Revenue Stability", "score": round(p4, 1), "metric": f"{cv:.2f} volatility ratio"},
+    ]
+    sorted_p = sorted(pillars, key=lambda x: x["score"])
+
+    # Render Gauge Chart in Matplotlib
+    bg_color = "#161b22" if theme == "dark" else "#ffffff"
+    text_color = "#e6edf3" if theme == "dark" else "#1f2937"
+
+    fig, ax = plt.subplots(figsize=(5.5, 3.2), dpi=100)
+    fig.patch.set_facecolor(bg_color)
+    ax.set_facecolor(bg_color)
+
+    wedges = [(108, 180, "#ef4444"), (63, 108, "#f59e0b"), (36, 63, "#3b82f6"), (0, 36, "#10b981")]
+    for t1, t2, col in wedges:
+        ax.add_patch(Wedge((0, 0), 1.0, t1, t2, width=0.32, facecolor=col, edgecolor=bg_color, lw=2))
+
+    needle_angle = 180.0 - (total_score * 1.8)
+    rad = np.radians(needle_angle)
+    ax.plot([0, 0.78 * np.cos(rad)], [0, 0.78 * np.sin(rad)], color=text_color, lw=3.5, solid_capstyle="round")
+    ax.add_patch(Circle((0, 0), 0.12, facecolor=text_color, edgecolor=bg_color, lw=2))
+
+    ax.text(0, -0.22, f"{total_score}", ha="center", va="center", fontsize=26, fontweight="bold", color=r_color)
+    ax.text(0, -0.42, f"/ 100 • {rating}", ha="center", va="center", fontsize=11, fontweight="bold", color=text_color)
+    ax.set_xlim(-1.25, 1.25)
+    ax.set_ylim(-0.55, 1.15)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor=bg_color)
+    plt.close(fig)
+    buf.seek(0)
+    gauge_b64 = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+
+    return {
+        "total_score": total_score,
+        "rating": rating,
+        "color": r_color,
+        "pillars": pillars,
+        "constraining_factor": f"{sorted_p[0]['name']} is dragging the score ({sorted_p[0]['score']:.1f}/25)",
+        "primary_catalyst": f"{sorted_p[-1]['name']} is propelling performance ({sorted_p[-1]['score']:.1f}/25)",
+        "gauge_chart_base64": gauge_b64,
+    }
+
+
+# ==============================================================================
+# 7. FEATURE D: "ANOMALY RADAR" (Z-SCORE ENGINE)
+# ==============================================================================
+
+def detect_sales_anomalies(df: pd.DataFrame, threshold_z: float = 2.2) -> list:
+    """
+    Feature D: Flags unusual sales days using statistical Z-Score on daily revenue.
+    Infers rule-based diagnostic causes (Black Friday surges, storms, clearance days).
+    """
+    if df.empty:
+        return []
+
+    daily = df.groupby(df["Date"].dt.date).agg(
+        Sales=("Sales", "sum"),
+        Orders=("Order_ID", "nunique"),
+        Avg_Discount=("Discount", "mean"),
+        Top_Category=("Category", lambda x: x.mode()[0] if not x.empty else "N/A"),
+    ).reset_index()
+
+    daily["Date"] = pd.to_datetime(daily["Date"])
+    mean_s = daily["Sales"].mean()
+    std_s = daily["Sales"].std()
+
+    if std_s == 0 or np.isnan(std_s):
+        return []
+
+    daily["Z"] = (daily["Sales"] - mean_s) / std_s
+    daily["Dev"] = ((daily["Sales"] - mean_s) / max(mean_s, 1)) * 100.0
+
+    outliers = daily[daily["Z"].abs() >= threshold_z].copy()
+    results = []
+
+    for _, r in outliers.iterrows():
+        z_val = float(r["Z"])
+        dev_val = float(r["Dev"])
+        sales_val = float(r["Sales"])
+        disc = float(r["Avg_Discount"])
+        day_name = r["Date"].strftime("%A")
+
+        if z_val > 0:
+            a_type = "spike"
+            if disc >= 0.22:
+                reason = f"Promotional Clearance Surge (Avg Disc: {disc*100:.0f}%, {int(r['Orders'])} orders)"
+            elif r["Date"].month in [11, 12]:
+                reason = f"Holiday / Cyber Season Demand Peak ({r['Top_Category']}, {int(r['Orders'])} orders)"
+            elif day_name in ["Saturday", "Sunday"]:
+                reason = f"Weekend Customer Traffic Spike (+{dev_val:.0f}% vs mean)"
+            else:
+                reason = f"Flash Volume Surge in {r['Top_Category']} ({int(r['Orders'])} orders)"
+        else:
+            a_type = "drop"
+            if sales_val <= 0.15 * mean_s:
+                reason = f"Severe Outage / Extreme Weather Closure (Sales down {abs(dev_val):.0f}%)"
+            else:
+                reason = f"Midweek Purchasing Lull ({int(r['Orders'])} transactions)"
+
+        results.append({
+            "date": r["Date"].strftime("%Y-%m-%d"),
+            "day": day_name,
+            "sales": round(sales_val, 2),
+            "orders": int(r["Orders"]),
+            "z_score": round(z_val, 2),
+            "deviation_pct": f"{'+' if dev_val > 0 else ''}{dev_val:.1f}%",
+            "type": a_type,
+            "reason": reason,
+        })
+
+    return sorted(results, key=lambda x: abs(x["z_score"]), reverse=True)
+
+
+# ==============================================================================
+# DEMONSTRATION ENTRY POINT
+# ==============================================================================
+
+if __name__ == "__main__":
+    import os
+    default_csv = os.path.join(os.path.dirname(__file__), "data", "sales.csv")
+
+    df = validate_and_load_csv(default_csv)
+    kpis = calculate_kpis(df, df)
+    anomalies = detect_sales_anomalies(df)
+    stories = generate_data_storyteller_insights(df, anomalies)
+    sim = run_what_if_simulation(df, price_change_pct=10.0, discount_change_pct=-5.0, quantity_change_pct=5.0)
+    health = calculate_business_health_score(df)
+
+    print(f"Loaded: {len(df):,} transactions | Total Sales: {kpis['total_sales_formatted']}")
+    print(f"Health Score: {health['total_score']}/100 ({health['rating']})")
+    print(f"Anomalies Detected: {len(anomalies)}")
+    print(f"Simulator Verdict: {sim['verdict']}")
