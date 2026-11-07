@@ -1,0 +1,513 @@
+"""
+bill_logic.py
+=============================================================================
+Core Business Logic for the Smart GST Bill Generator Application.
+Includes:
+  1. Product & Invoice Data Models (Item, BillSummary)
+  2. Multi-Rate GST & Discount Calculation Engine (BillCalculator)
+  3. Indian Currency Number-to-Words Converter (Lakhs & Crores)
+  4. Standout Feature: AI Smart Quick-Biller (Natural Language String Parser)
+  5. NPCI UPI Payment Link / QR Code String Generator
+  6. Formatted Bill Renderers (Executive A4 & POS Thermal Slip)
+=============================================================================
+"""
+
+import sys
+import re
+import math
+from dataclasses import dataclass
+from datetime import datetime
+from typing import List, Dict, Any
+from urllib.parse import quote
+
+# Ensure safe UTF-8 output across Windows and POSIX terminals
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+# =============================================================================
+# 1. DATA MODELS
+# =============================================================================
+@dataclass
+class Item:
+    """Represents an individual purchased product or service."""
+    name: str
+    quantity: float
+    price: float
+    gst_rate: float = 18.0  # GST slabs: 0%, 5%, 12%, 18%, 28%
+    hsn: str = ""
+
+    @property
+    def taxable_amount(self) -> float:
+        """Gross line amount before GST: (Quantity x Unit Price)."""
+        return round(self.quantity * self.price, 2)
+
+    @property
+    def gst_amount(self) -> float:
+        """Tax amount calculated for this item."""
+        return round((self.taxable_amount * self.gst_rate) / 100.0, 2)
+
+    @property
+    def line_total(self) -> float:
+        """Total line amount including GST."""
+        return round(self.taxable_amount + self.gst_amount, 2)
+
+
+@dataclass
+class BillSummary:
+    """Represents the complete computed billing output."""
+    items: List[Item]
+    subtotal: float
+    discount_type: str
+    discount_value: float
+    discount_amount: float
+    net_taxable: float
+    tax_type: str  # 'intra' (CGST+SGST) or 'inter' (IGST)
+    cgst_amount: float
+    sgst_amount: float
+    igst_amount: float
+    total_tax: float
+    round_off: float
+    grand_total: float
+    amount_in_words: str
+    tax_slabs: List[Dict[str, float]]
+    upi_link: str
+
+
+# =============================================================================
+# 2. INDIAN NUMBER-TO-WORDS CONVERTER (Lakhs & Crores)
+# =============================================================================
+ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+        "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+        "Seventeen", "Eighteen", "Nineteen"]
+TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+
+
+def _two_digits_to_words(n: int) -> str:
+    if n == 0:
+        return ""
+    if n < 20:
+        return ONES[n]
+    tens_digit = n // 10
+    ones_digit = n % 10
+    return TENS[tens_digit] + (" " + ONES[ones_digit] if ones_digit > 0 else "")
+
+
+def _three_digits_to_words(n: int) -> str:
+    hundreds = n // 100
+    remainder = n % 100
+    res = []
+    if hundreds > 0:
+        res.append(ONES[hundreds] + " Hundred")
+    if remainder > 0:
+        res.append(_two_digits_to_words(remainder))
+    return " ".join(res)
+
+
+def amount_to_indian_words(amount: float) -> str:
+    """
+    Converts currency amounts into Indian numbering words (Lakhs & Crores).
+    Example: 145230.50 -> 'Rupees One Lakh Forty Five Thousand Two Hundred Thirty and Fifty Paise Only'
+    """
+    amount = round(amount, 2)
+    if amount <= 0:
+        return "Rupees Zero Only"
+
+    rupees = int(amount)
+    paise = int(round((amount - rupees) * 100))
+
+    parts = []
+    if rupees > 0:
+        crores = rupees // 10000000
+        rupees %= 10000000
+
+        lakhs = rupees // 100000
+        rupees %= 100000
+
+        thousands = rupees // 1000
+        rupees %= 1000
+
+        hundreds_and_below = rupees
+
+        if crores > 0:
+            parts.append(_three_digits_to_words(crores) + " Crore")
+        if lakhs > 0:
+            parts.append(_two_digits_to_words(lakhs) + " Lakh")
+        if thousands > 0:
+            parts.append(_two_digits_to_words(thousands) + " Thousand")
+        if hundreds_and_below > 0:
+            parts.append(_three_digits_to_words(hundreds_and_below))
+
+        rupee_str = "Rupees " + " ".join(parts).strip()
+    else:
+        rupee_str = ""
+
+    paise_str = ""
+    if paise > 0:
+        paise_str = _two_digits_to_words(paise) + " Paise"
+
+    if rupee_str and paise_str:
+        return f"{rupee_str} and {paise_str} Only"
+    elif rupee_str:
+        return f"{rupee_str} Only"
+    else:
+        return f"{paise_str} Only"
+
+
+# =============================================================================
+# 3. AI SMART QUICK-BILLER (NATURAL LANGUAGE PARSER)
+# =============================================================================
+def parse_natural_language_items(text: str) -> List[Item]:
+    """
+    Standout Feature: Automatically extracts product name, quantity, price,
+    and GST rate from unstructured text or speech transcription.
+    
+    Examples handled:
+      - '2x Wireless Mouse at 499 18% gst'
+      - '5kg Basmati Rice @ 95 5% gst'
+      - 'Coffee Mug 199 12% gst'
+    """
+    lines = [line.strip() for line in re.split(r"[\n;,]+", text) if line.strip()]
+    parsed_items = []
+
+    for line in lines:
+        working_line = line
+        qty = 1.0
+        price = 0.0
+        gst_rate = 18.0
+
+        # 1. Detect explicit GST rate (e.g. '18% gst', '5%')
+        gst_match = re.search(r'(\d+(?:\.\d+)?)\s*%\s*(?:gst)?', working_line, re.IGNORECASE)
+        if gst_match:
+            try:
+                rate_val = float(gst_match.group(1))
+                if rate_val in [0, 5, 12, 18, 28]:
+                    gst_rate = rate_val
+                working_line = working_line[:gst_match.start()] + " " + working_line[gst_match.end():]
+            except ValueError:
+                pass
+
+        # 2. Detect Price with indicator keywords (@, at, rs, inr, price)
+        price_patterns = [
+            r'(?:@|at|price|rate|cost|rs\.?|inr)\s*[:=]?\s*(\d+(?:\.\d+)?)',
+            r'(\d+(?:\.\d+)?)\s*(?:each|per\s+piece|rs|inr|\/-)'
+        ]
+        price_found = False
+        for p in price_patterns:
+            m = re.search(p, working_line, re.IGNORECASE)
+            if m:
+                try:
+                    price = float(m.group(1))
+                    price_found = True
+                    working_line = working_line[:m.start()] + " " + working_line[m.end():]
+                    break
+                except ValueError:
+                    pass
+
+        # 3. Detect Quantity (e.g. '2x', '5kg', '3 packets', or leading number)
+        qty_match = re.search(r'^\s*(\d+(?:\.\d+)?)\s*(?:x|kg|gm|ltr|pcs|nos|packets|units)?\b', working_line, re.IGNORECASE)
+        if qty_match:
+            try:
+                matched_qty = float(qty_match.group(1))
+                if matched_qty != price:
+                    qty = matched_qty
+                    working_line = working_line[qty_match.end():].strip()
+            except ValueError:
+                pass
+
+        if not price_found:
+            trailing = re.search(r'(\d+(?:\.\d+)?)\s*$', working_line)
+            if trailing:
+                try:
+                    price = float(trailing.group(1))
+                    working_line = working_line[:trailing.start()].strip()
+                except ValueError:
+                    pass
+
+        # 4. Clean up product name
+        name = re.sub(r'\s+', ' ', working_line).strip(' ,;:-@')
+        name = re.sub(r'\b(at|for|with|each|gst|rs|price|cost|qty)\b', '', name, flags=re.IGNORECASE).strip(' ,;:-@')
+        if not name:
+            name = f"Product {len(parsed_items) + 1}"
+        if price <= 0:
+            price = 50.0
+
+        parsed_items.append(Item(name=name.title(), quantity=qty, price=price, gst_rate=gst_rate))
+
+    return parsed_items
+
+
+# =============================================================================
+# 4. BILL CALCULATION ENGINE
+# =============================================================================
+class BillCalculator:
+    """Core mathematical engine for GST calculations and invoice synthesis."""
+
+    @staticmethod
+    def generate_upi_link(vpa: str, payee_name: str, amount: float, invoice_no: str) -> str:
+        """Generates standard NPCI UPI payment deep link string."""
+        pa = quote(vpa.strip())
+        pn = quote(payee_name.strip())
+        tn = quote(f"Bill {invoice_no}")
+        return f"upi://pay?pa={pa}&pn={pn}&am={amount:.2f}&cu=INR&tn={tn}"
+
+    @classmethod
+    def calculate(
+        cls,
+        items: List[Item],
+        discount_type: str = "percentage",  # 'percentage' or 'flat'
+        discount_value: float = 0.0,
+        tax_type: str = "intra",            # 'intra' (CGST+SGST) or 'inter' (IGST)
+        apply_round_off: bool = True,
+        vpa: str = "merchant@upi",
+        payee_name: str = "Store Billing",
+        invoice_no: str = "INV-001"
+    ) -> BillSummary:
+        """
+        Calculates subtotal, discounts, CGST/SGST or IGST tax splits,
+        nearest Rupee round-off, amount in words, and payment deep-links.
+        """
+        subtotal = sum(it.taxable_amount for it in items)
+        gross_tax = sum(it.gst_amount for it in items)
+
+        # 1. Discount deduction
+        disc_val = max(0.0, float(discount_value))
+        if discount_type == "percentage":
+            discount_amount = round((subtotal * disc_val) / 100.0, 2)
+        else:
+            discount_amount = round(min(disc_val, subtotal), 2)
+
+        net_taxable = round(max(0.0, subtotal - discount_amount), 2)
+
+        # 2. Prorated tax if discount is applied across bill
+        if subtotal > 0 and discount_amount > 0:
+            tax_ratio = net_taxable / subtotal
+            total_tax = round(gross_tax * tax_ratio, 2)
+        else:
+            total_tax = round(gross_tax, 2)
+
+        # 3. Tax Split: CGST/SGST (Intra-state) vs IGST (Inter-state)
+        cgst_amount = 0.0
+        sgst_amount = 0.0
+        igst_amount = 0.0
+
+        if tax_type == "intra":
+            cgst_amount = round(total_tax / 2.0, 2)
+            sgst_amount = round(total_tax - cgst_amount, 2)  # Avoid decimal drift
+        else:
+            igst_amount = total_tax
+
+        # 4. Total calculation and Round-Off
+        unrounded_total = net_taxable + total_tax
+        if apply_round_off:
+            rounded_total = float(round(unrounded_total))
+            round_off = round(rounded_total - unrounded_total, 2)
+            grand_total = rounded_total
+        else:
+            round_off = 0.0
+            grand_total = round(unrounded_total, 2)
+
+        # 5. Tax slabs summary
+        slab_dict: Dict[float, Dict[str, float]] = {}
+        for it in items:
+            rate = it.gst_rate
+            if rate not in slab_dict:
+                slab_dict[rate] = {"taxable": 0.0, "tax": 0.0}
+            slab_dict[rate]["taxable"] += it.taxable_amount
+            slab_dict[rate]["tax"] += it.gst_amount
+
+        tax_slabs = [
+            {"rate": r, "taxable": round(data["taxable"], 2), "tax": round(data["tax"], 2)}
+            for r, data in sorted(slab_dict.items())
+        ]
+
+        # 6. Currency words and UPI payment string
+        words = amount_to_indian_words(grand_total)
+        upi = cls.generate_upi_link(vpa, payee_name, grand_total, invoice_no)
+
+        return BillSummary(
+            items=items,
+            subtotal=round(subtotal, 2),
+            discount_type=discount_type,
+            discount_value=disc_val,
+            discount_amount=discount_amount,
+            net_taxable=net_taxable,
+            tax_type=tax_type,
+            cgst_amount=cgst_amount,
+            sgst_amount=sgst_amount,
+            igst_amount=igst_amount,
+            total_tax=total_tax,
+            round_off=round_off,
+            grand_total=grand_total,
+            amount_in_words=words,
+            tax_slabs=tax_slabs,
+            upi_link=upi
+        )
+
+
+# =============================================================================
+# 5. FORMATTED BILL RENDERERS
+# =============================================================================
+class BillFormatter:
+    """Renders formatted bills in Executive A4 table format and POS Thermal Slip."""
+
+    @staticmethod
+    def render_a4(company: dict, customer: dict, b: BillSummary, inv_no: str, date_str: str) -> str:
+        w = 68
+        border = "=" * w
+        dash = "-" * w
+        lines = [
+            border,
+            f"{'TAX INVOICE':^{w}}",
+            f"{company.get('name', 'Apex Retail Store'):^{w}}",
+            f"{company.get('address', 'Mumbai, India'):^{w}}",
+            f"GSTIN: {company.get('gstin', '27AAPFU0939F1ZV'):^{w}}",
+            border,
+            f" Invoice No : {inv_no:<24} Date: {date_str:>23}",
+            f" Customer   : {customer.get('name', 'Walk-in'):<24} Phone: {customer.get('phone', 'N/A'):>22}",
+            dash,
+            f" {'#':<2} {'Item Description':<26} {'Qty':>5} {'Rate':>9} {'GST%':>5} {'Total (Rs)':>12}",
+            dash
+        ]
+
+        for idx, it in enumerate(b.items, 1):
+            name = it.name[:26]
+            lines.append(f" {idx:<2} {name:<26} {it.quantity:>5.1f} {it.price:>9.2f} {it.gst_rate:>4.0f}% {it.line_total:>12.2f}")
+
+        lines.extend([
+            dash,
+            f" {'Gross Subtotal:':<50} Rs. {b.subtotal:>12.2f}",
+        ])
+
+        if b.discount_amount > 0:
+            lines.append(f" {'Discount Applied:':<50} -Rs. {b.discount_amount:>11.2f}")
+            lines.append(f" {'Net Taxable Base:':<50} Rs. {b.net_taxable:>12.2f}")
+
+        if b.tax_type == "intra":
+            lines.append(f" {'CGST (Central Tax 50%):':<50} Rs. {b.cgst_amount:>12.2f}")
+            lines.append(f" {'SGST (State Tax 50%):':<50} Rs. {b.sgst_amount:>12.2f}")
+        else:
+            lines.append(f" {'IGST (Integrated Tax 100%):':<50} Rs. {b.igst_amount:>12.2f}")
+
+        if b.round_off != 0.0:
+            lines.append(f" {'Round Off Adjustment:':<50} Rs. {b.round_off:>12.2f}")
+
+        lines.extend([
+            border,
+            f" {'GRAND TOTAL PAYABLE:':<50} Rs. {b.grand_total:>12.2f}",
+            border,
+            " Amount in Words:",
+            f" >> {b.amount_in_words}",
+            dash,
+            f" Instant UPI Payment Link (Scan & Pay):",
+            f" >> {b.upi_link}",
+            border,
+            f"{'Thank you for your business! Please visit again.':^{w}}",
+            border
+        ])
+        return "\n".join(lines)
+
+    @staticmethod
+    def render_thermal(company: dict, customer: dict, b: BillSummary, inv_no: str, date_str: str) -> str:
+        w = 40
+        dash = "-" * w
+        dots = "." * w
+        lines = [
+            dots,
+            f"{company.get('name', 'Apex Retail')[:w]:^{w}}",
+            f"GSTIN: {company.get('gstin', '27AAPFU0939F1ZV'):^{w}}",
+            dots,
+            f"RCPT: {inv_no:<14} {date_str:>16}",
+            f"CUST: {customer.get('name', 'Walk-in')[:20]}",
+            dash,
+            f"ITEM                 QTYxPRICE     TOTAL",
+            dash
+        ]
+
+        for it in b.items:
+            lines.append(f"{it.name[:18]:<18} {it.quantity:.0f}x{it.price:<7.1f} {it.line_total:>9.2f}")
+
+        lines.extend([
+            dash,
+            f"SUBTOTAL:                    Rs. {b.subtotal:>8.2f}",
+        ])
+        if b.discount_amount > 0:
+            lines.append(f"DISCOUNT:                   -Rs. {b.discount_amount:>8.2f}")
+
+        lines.append(f"TOTAL GST:                   Rs. {b.total_tax:>8.2f}")
+        if b.round_off != 0.0:
+            lines.append(f"ROUND OFF:                   Rs. {b.round_off:>8.2f}")
+
+        lines.extend([
+            dash,
+            f"TOTAL PAYABLE:               Rs. {b.grand_total:>8.2f}",
+            dash,
+            f"UPI VPA: {company.get('upi_id', 'store@upi')}",
+            f"{'*** THANK YOU! ***':^{w}}",
+            dots
+        ])
+        return "\n".join(lines)
+
+
+# =============================================================================
+# 6. DEMO EXECUTION
+# =============================================================================
+if __name__ == "__main__":
+    print("\n" + "=" * 60)
+    print("  SMART BILL GENERATOR - LOGIC DEMONSTRATION")
+    print("=" * 60)
+
+    # 1. Parse quick natural language items
+    sample_text = """
+    2x Wireless Mouse at 499 18% gst
+    5kg Basmati Rice @ 95 5% gst
+    1 Coffee Mug at 199 12% gst
+    """
+    print("\n[1] Parsing Natural Language Text:")
+    items = parse_natural_language_items(sample_text)
+    for it in items:
+        print(f"  * {it.name} | Qty: {it.quantity} | Rate: Rs.{it.price:.2f} | GST: {it.gst_rate}% | Line Total: Rs.{it.line_total:.2f}")
+
+    # 2. Run Bill Calculation
+    print("\n[2] Calculating Bill Summary with 5% Discount & Intra-State GST:")
+    company = {
+        "name": "Apex Supermart Pvt Ltd",
+        "address": "42 Silicon Plaza, Mumbai - 400001",
+        "gstin": "27AAPFU0939F1ZV",
+        "upi_id": "apexretail@upi"
+    }
+    customer = {
+        "name": "Amit Sharma",
+        "phone": "+91 98765 43210"
+    }
+
+    inv_number = f"INV-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    today_str = datetime.now().strftime("%d-%b-%Y %I:%M %p")
+
+    bill = BillCalculator.calculate(
+        items=items,
+        discount_type="percentage",
+        discount_value=5.0,
+        tax_type="intra",
+        apply_round_off=True,
+        vpa=company["upi_id"],
+        payee_name=company["name"],
+        invoice_no=inv_number
+    )
+
+    print(f"  * Subtotal        : Rs. {bill.subtotal:.2f}")
+    print(f"  * Discount (5%)   : -Rs. {bill.discount_amount:.2f}")
+    print(f"  * Net Taxable     : Rs. {bill.net_taxable:.2f}")
+    print(f"  * CGST (9%)       : Rs. {bill.cgst_amount:.2f}")
+    print(f"  * SGST (9%)       : Rs. {bill.sgst_amount:.2f}")
+    print(f"  * Round Off       : Rs. {bill.round_off:.2f}")
+    print(f"  * Grand Total     : Rs. {bill.grand_total:.2f}")
+    print(f"  * In Words        : {bill.amount_in_words}")
+
+    # 3. Formatted Tax Invoice (A4 Layout)
+    print("\n[3] Formatted Tax Invoice (A4 Layout):")
+    print(BillFormatter.render_a4(company, customer, bill, inv_number, today_str))
+
+    # 4. Formatted POS Thermal Slip
+    print("\n[4] Formatted POS Thermal Slip (Supermarket / Cafe Layout):")
+    print(BillFormatter.render_thermal(company, customer, bill, inv_number, today_str))
